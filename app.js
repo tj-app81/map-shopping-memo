@@ -539,9 +539,9 @@ function showCategoryMarkers(results, lat, lng) {
 // Places API の周辺検索で「近くに該当チェーンの店舗があるか」を調べる。
 // API消費を抑えるため、前回の問い合わせ地点から一定距離動いたときだけ実行する。
 const CHAIN_QUERY_MIN_INTERVAL_MS = 60 * 1000;      // 問い合わせは最短でも1分空ける
-// 再問い合わせに必要な移動距離：通知距離が短いほど細かくチェック（最低80m）
+// 再問い合わせに必要な移動距離：通知距離が短いほど細かくチェック（最低40m）
 function chainQueryMinMove() {
-  return Math.max(80, Math.round(settings.chainDist * 0.8));
+  return Math.max(40, Math.round(settings.chainDist * 0.8));
 }
 
 let placesService = null;
