@@ -673,26 +673,19 @@ function renderNearby(fix) {
     return;
   }
   const restText = (p) => p.items.filter((i) => !i.checked).map((i) => i.text).join("、");
+  const fmt = (d) => (d < 1000 ? `約${Math.round(d)}m` : `約${(d / 1000).toFixed(1)}km`);
 
-  // 場所ピン：距離順
-  const pins = active.filter((p) => !p.chain && !p.category);
-  let rows;
-  if (fix) {
-    rows = pins
-      .map((p) => ({ p, d: distanceM(fix.lat, fix.lng, p.lat, p.lng) }))
-      .sort((a, b) => a.d - b.d);
-  } else {
-    rows = pins.map((p) => ({ p, d: null }));
-    if (pins.length > 0) {
-      listEl.innerHTML = '<p class="empty">現在地が取れないため距離なしで表示しています</p>';
-    }
-  }
-  for (const { p, d } of rows) {
+  const addHeader = (text) => {
+    const h = document.createElement("div");
+    h.className = "nearby-section";
+    h.textContent = text;
+    listEl.appendChild(h);
+  };
+  const addPinCard = (p, d, far) => {
     const div = document.createElement("div");
-    div.className = "place-card";
-    const dist = d == null ? "" : d < 1000 ? `約${Math.round(d)}m` : `約${(d / 1000).toFixed(1)}km`;
+    div.className = "place-card" + (far ? " far" : "");
     div.innerHTML =
-      `<div class="name">📍 ${escapeHtml(p.name || "（名前なし）")}${dist ? `<span class="dist">${dist}</span>` : ""}</div>` +
+      `<div class="name">📍 ${escapeHtml(p.name || "（名前なし）")}${d == null ? "" : `<span class="dist">${fmt(d)}</span>`}</div>` +
       `<div class="count">${escapeHtml(restText(p))}</div>`;
     div.addEventListener("click", () => {
       document.getElementById("nearby").classList.add("hidden");
@@ -701,22 +694,92 @@ function renderNearby(fix) {
       openPanel(p.id);
     });
     listEl.appendChild(div);
-  }
+  };
 
-  // チェーン・カテゴリ：「どこでも」枠として下に表示
-  for (const p of active.filter((p) => p.chain || p.category)) {
+  // 場所ピン：通知距離以内を「近く」、それ以外を「遠く」に分ける
+  const pins = active.filter((p) => !p.chain && !p.category);
+  if (fix) {
+    const rows = pins
+      .map((p) => ({ p, d: distanceM(fix.lat, fix.lng, p.lat, p.lng) }))
+      .sort((a, b) => a.d - b.d);
+    const near = rows.filter((r) => r.d <= settings.pinDist);
+    const far = rows.filter((r) => r.d > settings.pinDist);
+    if (near.length > 0) {
+      addHeader(`近く（${settings.pinDist}m以内）`);
+      near.forEach((r) => addPinCard(r.p, r.d, false));
+    }
+    // チェーン・カテゴリは「近く」の直後に挟むため、遠くは後で追加する
+    renderNearbyChains(listEl, active, fix, restText, fmt, addHeader);
+    if (far.length > 0) {
+      addHeader("遠く");
+      far.forEach((r) => addPinCard(r.p, r.d, true));
+    }
+    if (near.length === 0 && far.length === 0 && active.every((p) => p.chain || p.category)) {
+      // ピンが1つもない場合はチェーンのみ表示（ヘッダーはrenderNearbyChains側）
+    }
+  } else {
+    if (pins.length > 0) {
+      addHeader("現在地が取れないため距離なしで表示");
+      pins.forEach((p) => addPinCard(p, null, false));
+    }
+    renderNearbyChains(listEl, active, null, restText, fmt, addHeader);
+  }
+}
+
+// チェーン・カテゴリ枠：最寄り店舗を検索して距離を表示
+function renderNearbyChains(listEl, active, fix, restText, fmt, addHeader) {
+  const chains = active.filter((p) => p.chain || p.category);
+  if (chains.length === 0) return;
+  addHeader("どこの店でも");
+  for (const p of chains) {
     const div = document.createElement("div");
     div.className = "place-card chain";
     const emoji = p.chain ? "🏪" : categoryEmoji(p);
     div.innerHTML =
-      `<div class="name">${emoji} ${escapeHtml(p.name || "（名前なし）")}<span class="dist">近くの店で通知</span></div>` +
+      `<div class="name">${emoji} ${escapeHtml(p.name || "（名前なし）")}<span class="dist">${fix ? "検索中…" : ""}</span></div>` +
       `<div class="count">${escapeHtml(restText(p))}</div>`;
     div.addEventListener("click", () => {
       document.getElementById("nearby").classList.add("hidden");
       openPanel(p.id);
     });
     listEl.appendChild(div);
+    if (fix) {
+      const span = div.querySelector(".dist");
+      findNearestBranch(p, fix, (branch, d) => {
+        if (!branch) {
+          span.textContent = "近くに店なし";
+          return;
+        }
+        span.textContent = `${branch.name}・${fmt(d)}`;
+        // 最寄り店舗の位置へ飛べるようにする
+        const pos = { lat: branch.geometry.location.lat(), lng: branch.geometry.location.lng() };
+        div.addEventListener("click", () => {
+          map.setCenter(pos);
+          map.setZoom(Math.max(map.getZoom(), 16));
+        });
+      });
+    }
   }
+}
+
+// 最寄りの該当店舗を1件探す
+function findNearestBranch(p, fix, cb) {
+  if (!placesService) placesService = new google.maps.places.PlacesService(map);
+  const req = { location: fix, rankBy: google.maps.places.RankBy.DISTANCE };
+  if (p.category && p.category !== "custom") req.type = p.category;
+  else req.keyword = p.name;
+  placesService.nearbySearch(req, (results, status) => {
+    if (
+      status !== google.maps.places.PlacesServiceStatus.OK ||
+      !results || results.length === 0 ||
+      !results[0].geometry || !results[0].geometry.location
+    ) {
+      cb(null);
+      return;
+    }
+    const b = results[0];
+    cb(b, distanceM(fix.lat, fix.lng, b.geometry.location.lat(), b.geometry.location.lng()));
+  });
 }
 
 // 開いたときに見守りを自動開始する。

@@ -197,6 +197,13 @@ html, body {
   font-weight: 400;
   color: var(--muted);
 }
+#nearby-list .nearby-section {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  margin: 12px 2px 6px;
+}
+#nearby-list .place-card.far { opacity: .5; }
 
 /* ===== ボトムシート共通 ===== */
 #sheet, #panel, #nearby {
