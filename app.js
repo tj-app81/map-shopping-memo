@@ -1,5 +1,5 @@
-// MapShoppingMemo — 公開版（Google Maps + PWA通知対応）
-// Google Maps + Places で店舗を検索してピン。データは端末内(localStorage)に保存。
+// スポットメモ（旧MapShoppingMemo）— 公開版（Google Maps + PWA通知対応）
+// 行く場所にメモをピンして、近くに来たら通知。データは端末内(localStorage)に保存。
 
 const STORAGE_KEY = "mapShoppingMemo.places.v1";
 
@@ -220,8 +220,8 @@ function renderList() {
       place.items.length === 0
         ? "メモなし"
         : rest > 0
-        ? `買うもの ${rest}件` + (place.chain ? "・どこの店舗でも通知" : place.category ? "・近くの店ならどこでも通知" : "")
-        : "ぜんぶ買えた ✓";
+        ? `メモ ${rest}件` + (place.chain ? "・どこの店舗でも通知" : place.category ? "・近くの店ならどこでも通知" : "")
+        : "ぜんぶ完了 ✓";
     card.innerHTML = `<div class="name">${escapeHtml(name)}</div><div class="count">${count}</div>`;
     card.addEventListener("click", () => {
       if (!place.chain && !place.category) {
@@ -304,6 +304,26 @@ function renderItems() {
     const label = document.createElement("label");
     label.textContent = item.text;
     label.addEventListener("click", () => cb.click());
+    // 写真サムネイル（あれば）
+    let thumb = null;
+    if (item.photo) {
+      thumb = document.createElement("img");
+      thumb.className = "thumb";
+      thumb.src = item.photo;
+      thumb.addEventListener("click", () => openLightbox(place, item));
+    }
+    // 📷 写真ボタン
+    const photoBtn = document.createElement("button");
+    photoBtn.className = "mini" + (item.photo ? " set" : "");
+    photoBtn.textContent = "📷";
+    photoBtn.title = "写真を添付";
+    photoBtn.addEventListener("click", () => startPhoto(place, item));
+    // 🔗 リンクボタン
+    const linkBtn = document.createElement("button");
+    linkBtn.className = "mini" + (item.link ? " set" : "");
+    linkBtn.textContent = "🔗";
+    linkBtn.title = "リンクを添付";
+    linkBtn.addEventListener("click", () => handleLink(place, item));
     const rm = document.createElement("button");
     rm.className = "remove";
     rm.textContent = "🗑";
@@ -315,9 +335,99 @@ function renderItems() {
       refreshMarker(place.id);
       renderList();
     });
-    li.append(cb, label, rm);
+    if (thumb) li.append(cb, thumb, label, photoBtn, linkBtn, rm);
+    else li.append(cb, label, photoBtn, linkBtn, rm);
     itemListEl.appendChild(li);
   }
+}
+
+// ---- 写真・リンク添付 ----
+const photoInput = document.getElementById("photo-input");
+let photoTarget = null; // { placeId, itemId }
+
+function startPhoto(place, item) {
+  if (item.photo) {
+    openLightbox(place, item); // すでにあれば拡大表示
+    return;
+  }
+  photoTarget = { placeId: place.id, itemId: item.id };
+  photoInput.value = "";
+  photoInput.click();
+}
+
+photoInput.addEventListener("change", () => {
+  const file = photoInput.files && photoInput.files[0];
+  if (!file || !photoTarget) return;
+  const img = new Image();
+  img.onload = () => {
+    // 端末内保存(localStorage)の容量節約のため縮小してJPEG化
+    const MAX = 480;
+    const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(img.width * scale);
+    canvas.height = Math.round(img.height * scale);
+    canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+    const data = canvas.toDataURL("image/jpeg", 0.6);
+    URL.revokeObjectURL(img.src);
+    const place = findPlace(photoTarget.placeId);
+    const item = place && place.items.find((i) => i.id === photoTarget.itemId);
+    photoTarget = null;
+    if (!item) return;
+    item.photo = data;
+    try {
+      save();
+    } catch {
+      delete item.photo;
+      alert("保存容量がいっぱいです。ほかの写真を削除してから試してください。");
+    }
+    renderItems();
+  };
+  img.src = URL.createObjectURL(file);
+});
+
+function openLightbox(place, item) {
+  const lb = document.getElementById("lightbox");
+  document.getElementById("lightbox-img").src = item.photo;
+  lb.dataset.placeId = place.id;
+  lb.dataset.itemId = item.id;
+  lb.classList.remove("hidden");
+}
+document.getElementById("lightbox-close").addEventListener("click", () => {
+  document.getElementById("lightbox").classList.add("hidden");
+});
+document.getElementById("lightbox-delete").addEventListener("click", () => {
+  const lb = document.getElementById("lightbox");
+  const place = findPlace(lb.dataset.placeId);
+  const item = place && place.items.find((i) => i.id === lb.dataset.itemId);
+  if (item && confirm("写真を削除しますか？")) {
+    delete item.photo;
+    save();
+    renderItems();
+    lb.classList.add("hidden");
+  }
+});
+
+function handleLink(place, item) {
+  if (item.link) {
+    // 開く or 削除
+    if (confirm("リンクを開きますか？\n" + item.link)) {
+      window.open(item.link, "_blank");
+    } else if (confirm("このリンクを削除しますか？")) {
+      delete item.link;
+      save();
+      renderItems();
+    }
+    return;
+  }
+  const url = (prompt("リンクのURLを貼り付け（商品ページなど）") || "").trim();
+  if (!url) return;
+  if (!/^https?:\/\//.test(url)) {
+    alert("http:// または https:// で始まるURLを入力してください");
+    return;
+  }
+  item.link = url;
+  save();
+  renderItems();
 }
 
 document.getElementById("panel-close").addEventListener("click", closePanel);
@@ -372,7 +482,7 @@ function setupWatch() {
   document.getElementById("watch-toggle").addEventListener("click", toggleWatch);
   document.getElementById("notify-test").addEventListener("click", async () => {
     if (!(await ensureNotifyPermission())) return;
-    notify("🛒 テスト通知", "近くに来たらこんなふうにお知らせします");
+    notify("📍 テスト通知", "近くに来たらこんなふうにお知らせします");
   });
 }
 
@@ -446,7 +556,7 @@ async function toggleWatch() {
 function updateWatchStatus() {
   if (watchId === null) return;
   document.getElementById("watch-status").textContent =
-    `買い物が残っている場所の近く（📍${settings.pinDist}m／🏪${settings.chainDist}m）で通知します`;
+    `メモが残っている場所の近く（📍${settings.pinDist}m／🏪${settings.chainDist}m）で通知します`;
 }
 
 // 開いたときに見守りを自動開始する。
@@ -496,8 +606,8 @@ function onPosition(pos) {
       lastNotified[place.id] = Date.now();
       const items = place.items.filter((it) => !it.checked).map((it) => it.text).join("、");
       notify(
-        `🛒 「${place.name || "ピンした場所"}」の近くです（約${Math.round(d)}m）`,
-        "買うもの：" + items
+        `📍 「${place.name || "ピンした場所"}」の近くです（約${Math.round(d)}m）`,
+        "メモ：" + items
       );
     }
   }
@@ -621,7 +731,7 @@ function checkChains(lat, lng) {
       lastNotified[chain.id] = Date.now();
       const items = chain.items.filter((it) => !it.checked).map((it) => it.text).join("、");
       const icon = chain.category ? categoryEmoji(chain) : "🏪";
-      notify(`${icon} 「${branch.name}」の近くです（約${d}m）`, "買うもの：" + items);
+      notify(`${icon} 「${branch.name}」の近くです（約${d}m）`, "メモ：" + items);
     });
   }
 }

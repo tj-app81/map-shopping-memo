@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
   <meta name="theme-color" content="#2563eb" />
-  <title>買い物メモ — 地図で買い物メモ</title>
+  <title>スポットメモ — 行く場所にメモ、近くで通知</title>
   <link rel="stylesheet" href="style.css" />
   <!-- PWA（ホーム画面追加・通知用） -->
   <link rel="manifest" href="manifest.json" />
@@ -12,7 +12,7 @@
   <link rel="apple-touch-icon" href="icon-180.png" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-  <meta name="apple-mobile-web-app-title" content="買い物メモ" />
+  <meta name="apple-mobile-web-app-title" content="スポットメモ" />
 </head>
 <body>
   <!-- 地図（全画面） -->
@@ -31,7 +31,7 @@
 
   <!-- 下部バー -->
   <nav id="bottombar">
-    <button id="list-toggle" type="button">🛒 リスト</button>
+    <button id="list-toggle" type="button">📝 リスト</button>
     <button id="watch-toggle" type="button">🔔 見守り OFF</button>
     <button id="notify-test" type="button" title="通知の見た目を確認">✉️</button>
   </nav>
@@ -39,7 +39,7 @@
   <!-- 場所一覧（下からスライドするシート） -->
   <div id="sheet" class="hidden">
     <div class="sheet-handle"></div>
-    <h2>買い物リスト</h2>
+    <h2>メモリスト</h2>
     <div id="place-list"></div>
     <div id="add-row">
       <button id="add-chain" type="button">🏪 チェーン店メモ</button>
@@ -81,11 +81,23 @@
       <button id="panel-close" title="閉じる">✕</button>
     </div>
     <form id="item-form">
-      <input id="item-input" type="text" placeholder="買いたいもの（例：羊羹）" autocomplete="off" />
+      <input id="item-input" type="text" placeholder="やること・買うもの（例：羊羹を買う）" autocomplete="off" />
       <button type="submit">追加</button>
     </form>
     <ul id="item-list"></ul>
     <button id="delete-place" class="danger">この場所を削除</button>
+  </div>
+
+  <!-- 写真添付用（非表示のファイル選択） -->
+  <input id="photo-input" type="file" accept="image/*" hidden />
+
+  <!-- 写真の拡大表示 -->
+  <div id="lightbox" class="hidden">
+    <img id="lightbox-img" alt="写真" />
+    <div class="lightbox-actions">
+      <button id="lightbox-delete">写真を削除</button>
+      <button id="lightbox-close">閉じる</button>
+    </div>
   </div>
 
   <!-- アプリ本体（initApp を定義） -->

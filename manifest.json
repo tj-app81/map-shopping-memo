@@ -1,7 +1,7 @@
 {
-  "name": "地図で買い物メモ",
-  "short_name": "買い物メモ",
-  "description": "地図にピンして買い物メモ。近くに来たら通知します。",
+  "name": "スポットメモ",
+  "short_name": "スポットメモ",
+  "description": "行く場所にメモをピン。近くに来たら通知します。買い物・旅行・レジャーに。",
   "start_url": ".",
   "display": "standalone",
   "background_color": "#ffffff",
