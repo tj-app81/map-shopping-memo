@@ -481,6 +481,7 @@ const lastNotified = {};    // placeId -> 最後に通知した時刻（ms）
 function setupWatch() {
   document.getElementById("watch-toggle").addEventListener("click", toggleWatch);
   document.getElementById("notify-test").addEventListener("click", async () => {
+    unlockAudio();
     if (!(await ensureNotifyPermission())) return;
     notify("📍 テスト通知", "近くに来たらこんなふうにお知らせします");
   });
@@ -503,9 +504,11 @@ async function ensureNotifyPermission() {
   return true;
 }
 
-async function notify(title, body) {
+async function notify(title, body, onTap) {
+  // アプリ内の大きな通知カード（見やすさ優先）＋ 音
+  showInAppNote(title, body, onTap);
+  // OSの通知も並行して出す（他アプリを見ているときの保険）
   try {
-    // スマホ（Android / iPhoneのホーム画面アプリ）は Service Worker 経由でしか通知を出せない
     if ("serviceWorker" in navigator) {
       const reg = await navigator.serviceWorker.getRegistration();
       if (reg && Notification.permission === "granted") {
@@ -515,11 +518,60 @@ async function notify(title, body) {
     }
     new Notification(title, { body });
   } catch {
-    alert(title + "\n" + body); // 通知が出せない環境への保険
+    // アプリ内カードが出ているのでOS通知の失敗は無視してよい
   }
 }
 
+// ---- アプリ内通知カード ----
+function showInAppNote(title, body, onTap) {
+  const el = document.getElementById("inapp-note");
+  el.querySelector(".inapp-title").textContent = title;
+  el.querySelector(".inapp-body").textContent = body;
+  el.querySelector(".inapp-hint").style.display = onTap ? "" : "none";
+  el.onclick = (e) => {
+    if (e.target.id === "inapp-close") return;
+    if (onTap) onTap();
+    el.classList.add("hidden");
+  };
+  el.classList.remove("hidden");
+  clearTimeout(el._timer);
+  el._timer = setTimeout(() => el.classList.add("hidden"), 30000); // 30秒で自動的に消える
+  playChime();
+}
+document.getElementById("inapp-close").addEventListener("click", (e) => {
+  e.stopPropagation();
+  document.getElementById("inapp-note").classList.add("hidden");
+});
+
+// ---- 通知音（WebAudio・見守りONのタップで有効化） ----
+let audioCtx = null;
+function unlockAudio() {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+  } catch {}
+}
+function playChime() {
+  if (!audioCtx || audioCtx.state !== "running") return;
+  try {
+    const t = audioCtx.currentTime;
+    [[880, 0], [1174.7, 0.15]].forEach(([freq, dt]) => {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.001, t + dt);
+      gain.gain.exponentialRampToValueAtTime(0.25, t + dt + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + dt + 0.4);
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start(t + dt);
+      osc.stop(t + dt + 0.45);
+    });
+  } catch {}
+}
+
 async function toggleWatch() {
+  unlockAudio(); // ユーザー操作のタイミングで通知音を有効化（ブラウザの自動再生制限対策）
   const btn = document.getElementById("watch-toggle");
   const status = document.getElementById("watch-status");
 
@@ -607,7 +659,12 @@ function onPosition(pos) {
       const items = place.items.filter((it) => !it.checked).map((it) => it.text).join("、");
       notify(
         `📍 「${place.name || "ピンした場所"}」の近くです（約${Math.round(d)}m）`,
-        "メモ：" + items
+        "メモ：" + items,
+        () => {
+          map.setCenter({ lat: place.lat, lng: place.lng });
+          map.setZoom(Math.max(map.getZoom(), 16));
+          openPanel(place.id);
+        }
       );
     }
   }
@@ -731,7 +788,12 @@ function checkChains(lat, lng) {
       lastNotified[chain.id] = Date.now();
       const items = chain.items.filter((it) => !it.checked).map((it) => it.text).join("、");
       const icon = chain.category ? categoryEmoji(chain) : "🏪";
-      notify(`${icon} 「${branch.name}」の近くです（約${d}m）`, "メモ：" + items);
+      const branchPos = { lat: branch.geometry.location.lat(), lng: branch.geometry.location.lng() };
+      notify(`${icon} 「${branch.name}」の近くです（約${d}m）`, "メモ：" + items, () => {
+        map.setCenter(branchPos);
+        map.setZoom(Math.max(map.getZoom(), 16));
+        openPanel(chain.id);
+      });
     });
   }
 }
