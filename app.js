@@ -451,6 +451,7 @@ photoInput.addEventListener("change", () => {
 function openLightbox(place, item) {
   const lb = document.getElementById("lightbox");
   const im = document.getElementById("lightbox-img");
+  resetLightboxZoom();
   im.removeAttribute("src");
   if (item.photo) im.src = item.photo;
   else if (item.photoId) loadPhotoInto(im, item.photoId);
@@ -458,6 +459,79 @@ function openLightbox(place, item) {
   lb.dataset.itemId = item.id;
   lb.classList.remove("hidden");
 }
+
+// ---- 写真のピンチズーム（ピンチ・ドラッグ・ダブルタップ・ホイール） ----
+let lbScale = 1, lbTx = 0, lbTy = 0;
+
+function resetLightboxZoom() {
+  lbScale = 1; lbTx = 0; lbTy = 0;
+  applyLightboxZoom();
+}
+function applyLightboxZoom() {
+  document.getElementById("lightbox-img").style.transform =
+    `translate(${lbTx}px, ${lbTy}px) scale(${lbScale})`;
+}
+
+(function setupLightboxZoom() {
+  const im = document.getElementById("lightbox-img");
+  const pts = new Map(); // 触れている指
+  let startDist = 0, startScale = 1, startTx = 0, startTy = 0, startMid = null;
+  let lastTap = 0;
+
+  im.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    im.setPointerCapture(e.pointerId);
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size === 2) {
+      const [a, b] = [...pts.values()];
+      startDist = Math.hypot(a.x - b.x, a.y - b.y);
+      startScale = lbScale;
+      startMid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      startTx = lbTx; startTy = lbTy;
+    } else if (pts.size === 1) {
+      startTx = lbTx; startTy = lbTy;
+      startMid = { x: e.clientX, y: e.clientY };
+      const now = Date.now();
+      if (now - lastTap < 300) { // ダブルタップでズーム切替
+        if (lbScale > 1) resetLightboxZoom();
+        else { lbScale = 2.5; applyLightboxZoom(); }
+      }
+      lastTap = now;
+    }
+  });
+  im.addEventListener("pointermove", (e) => {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size === 2) {
+      // ピンチ：2本指の距離で拡大率、中点の移動で位置
+      const [a, b] = [...pts.values()];
+      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      lbScale = Math.min(6, Math.max(1, startScale * (dist / startDist)));
+      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      lbTx = startTx + (mid.x - startMid.x);
+      lbTy = startTy + (mid.y - startMid.y);
+      applyLightboxZoom();
+    } else if (pts.size === 1 && lbScale > 1) {
+      // 拡大中は1本指でドラッグ移動
+      lbTx = startTx + (e.clientX - startMid.x);
+      lbTy = startTy + (e.clientY - startMid.y);
+      applyLightboxZoom();
+    }
+  });
+  const lift = (e) => {
+    pts.delete(e.pointerId);
+    if (lbScale <= 1) { lbTx = 0; lbTy = 0; applyLightboxZoom(); }
+  };
+  im.addEventListener("pointerup", lift);
+  im.addEventListener("pointercancel", lift);
+  // PC：マウスホイールでズーム
+  im.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    lbScale = Math.min(6, Math.max(1, lbScale * (e.deltaY < 0 ? 1.15 : 0.87)));
+    if (lbScale <= 1) { lbTx = 0; lbTy = 0; }
+    applyLightboxZoom();
+  }, { passive: false });
+})();
 document.getElementById("lightbox-close").addEventListener("click", () => {
   document.getElementById("lightbox").classList.add("hidden");
 });
@@ -698,24 +772,32 @@ function updateWatchStatus() {
 // ---- 現在地 ----
 let lastFix = null; // 最新の現在地
 
-function updateMyMarker(lat, lng) {
+let lastHeading = 0; // 最後に取れた進行方向（度・北=0）
+
+function updateMyMarker(lat, lng, heading) {
+  if (typeof heading === "number" && !Number.isNaN(heading)) lastHeading = heading;
+  // Googleマップ公式風の「進行方向を向く矢印」
+  const icon = {
+    path: "M 0 -7 L 5 7 L 0 4 L -5 7 Z",
+    scale: 2,
+    fillColor: "#4285F4",
+    fillOpacity: 1,
+    strokeColor: "#ffffff",
+    strokeWeight: 1.5,
+    rotation: lastHeading,
+    anchor: new google.maps.Point(0, 0),
+  };
   if (!myMarker) {
     myMarker = new google.maps.Marker({
       position: { lat, lng },
       map,
-      icon: {
-        path: google.maps.SymbolPath.CIRCLE,
-        scale: 8,
-        fillColor: "#4285F4",
-        fillOpacity: 1,
-        strokeColor: "#fff",
-        strokeWeight: 2,
-      },
+      icon,
       title: "現在地",
       zIndex: 9999,
     });
   } else {
     myMarker.setPosition({ lat, lng });
+    myMarker.setIcon(icon); // 向きを更新
   }
 }
 
@@ -907,8 +989,8 @@ function onPosition(pos) {
   const { latitude, longitude } = pos.coords;
   lastFix = { lat: latitude, lng: longitude }; // 「近くのメモ」用に最新位置を記憶
 
-  // 現在地マーカー（青丸）
-  updateMyMarker(latitude, longitude);
+  // 現在地マーカー（進行方向つき矢印）
+  updateMyMarker(latitude, longitude, pos.coords.heading);
 
   // 買い物が残っている場所との距離をチェック
   for (const place of places) {
