@@ -98,6 +98,7 @@ function setupUI() {
     sheet.classList.toggle("hidden");
   });
   setupNearby();
+  setupLocate();
   // チェーンメモの追加
   document.getElementById("add-chain").addEventListener("click", () => {
     const place = { id: uid(), name: "", chain: true, items: [] };
@@ -636,8 +637,60 @@ function updateWatchStatus() {
     `メモが残っている場所の近く（📍${settings.pinDist}m／🏪${settings.chainDist}m）で通知します`;
 }
 
+// ---- 現在地 ----
+let lastFix = null; // 最新の現在地
+
+function updateMyMarker(lat, lng) {
+  if (!myMarker) {
+    myMarker = new google.maps.Marker({
+      position: { lat, lng },
+      map,
+      icon: {
+        path: google.maps.SymbolPath.CIRCLE,
+        scale: 8,
+        fillColor: "#4285F4",
+        fillOpacity: 1,
+        strokeColor: "#fff",
+        strokeWeight: 2,
+      },
+      title: "現在地",
+      zIndex: 9999,
+    });
+  } else {
+    myMarker.setPosition({ lat, lng });
+  }
+}
+
+// 🎯 現在地ボタン：地図を現在地へ移動
+function setupLocate() {
+  document.getElementById("locate-btn").addEventListener("click", async () => {
+    let fix = watchId !== null ? lastFix : null; // 見守り中は最新値を使う
+    if (!fix) {
+      if (!navigator.geolocation) {
+        alert("この環境では位置情報を取得できません");
+        return;
+      }
+      try {
+        const pos = await new Promise((res, rej) =>
+          navigator.geolocation.getCurrentPosition(res, rej, { timeout: 10000, maximumAge: 30000 })
+        );
+        fix = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        lastFix = fix;
+        updateMyMarker(fix.lat, fix.lng);
+      } catch {
+        if (lastFix) fix = lastFix;
+        else {
+          alert("現在地を取得できませんでした");
+          return;
+        }
+      }
+    }
+    map.setCenter(fix);
+    map.setZoom(Math.max(map.getZoom(), 16));
+  });
+}
+
 // ---- 近くのメモ（現在地から近い順に一覧表示） ----
-let lastFix = null; // 見守り中の最新位置
 
 function setupNearby() {
   document.getElementById("nearby-btn").addEventListener("click", async () => {
@@ -699,23 +752,18 @@ function renderNearby(fix) {
   // 場所ピン：通知距離以内を「近く」、それ以外を「遠く」に分ける
   const pins = active.filter((p) => !p.chain && !p.category);
   if (fix) {
-    const rows = pins
+    // 通知距離以内のメモだけを表示（全体の見渡しは📝リストの役割）
+    const near = pins
       .map((p) => ({ p, d: distanceM(fix.lat, fix.lng, p.lat, p.lng) }))
+      .filter((r) => r.d <= settings.pinDist)
       .sort((a, b) => a.d - b.d);
-    const near = rows.filter((r) => r.d <= settings.pinDist);
-    const far = rows.filter((r) => r.d > settings.pinDist);
     if (near.length > 0) {
       addHeader(`近く（${settings.pinDist}m以内）`);
       near.forEach((r) => addPinCard(r.p, r.d, false));
     }
-    // チェーン・カテゴリは「近く」の直後に挟むため、遠くは後で追加する
     renderNearbyChains(listEl, active, fix, restText, fmt, addHeader);
-    if (far.length > 0) {
-      addHeader("遠く");
-      far.forEach((r) => addPinCard(r.p, r.d, true));
-    }
-    if (near.length === 0 && far.length === 0 && active.every((p) => p.chain || p.category)) {
-      // ピンが1つもない場合はチェーンのみ表示（ヘッダーはrenderNearbyChains側）
+    if (listEl.children.length === 0) {
+      listEl.innerHTML = `<p class="empty">近く（${settings.pinDist}m以内）にメモはありません</p>`;
     }
   } else {
     if (pins.length > 0) {
@@ -802,24 +850,7 @@ function onPosition(pos) {
   lastFix = { lat: latitude, lng: longitude }; // 「近くのメモ」用に最新位置を記憶
 
   // 現在地マーカー（青丸）
-  if (!myMarker) {
-    myMarker = new google.maps.Marker({
-      position: { lat: latitude, lng: longitude },
-      map,
-      icon: {
-        path: google.maps.SymbolPath.CIRCLE,
-        scale: 8,
-        fillColor: "#4285F4",
-        fillOpacity: 1,
-        strokeColor: "#fff",
-        strokeWeight: 2,
-      },
-      title: "現在地",
-      zIndex: 9999,
-    });
-  } else {
-    myMarker.setPosition({ lat: latitude, lng: longitude });
-  }
+  updateMyMarker(latitude, longitude);
 
   // 買い物が残っている場所との距離をチェック
   for (const place of places) {
