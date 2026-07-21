@@ -318,15 +318,16 @@ function renderItems() {
     label.addEventListener("click", () => cb.click());
     // 写真サムネイル（あれば）
     let thumb = null;
-    if (item.photo) {
+    if (hasPhoto(item)) {
       thumb = document.createElement("img");
       thumb.className = "thumb";
-      thumb.src = item.photo;
+      if (item.photo) thumb.src = item.photo;
+      else loadPhotoInto(thumb, item.photoId);
       thumb.addEventListener("click", () => openLightbox(place, item));
     }
     // 📷 写真ボタン
     const photoBtn = document.createElement("button");
-    photoBtn.className = "mini" + (item.photo ? " set" : "");
+    photoBtn.className = "mini" + (hasPhoto(item) ? " set" : "");
     photoBtn.textContent = "📷";
     photoBtn.title = "写真を添付";
     photoBtn.addEventListener("click", () => startPhoto(place, item));
@@ -341,6 +342,7 @@ function renderItems() {
     rm.textContent = "🗑";
     rm.title = "削除";
     rm.addEventListener("click", () => {
+      if (item.photoId) deletePhotoBlob(item.photoId); // 添付写真も一緒に削除
       place.items = place.items.filter((it) => it.id !== item.id);
       save();
       renderItems();
@@ -357,8 +359,55 @@ function renderItems() {
 const photoInput = document.getElementById("photo-input");
 let photoTarget = null; // { placeId, itemId }
 
+// 写真は大容量のIndexedDBに保存する（localStorageは約5MBしかないため）
+let photoDbPromise = null;
+function photoDB() {
+  if (!photoDbPromise) {
+    photoDbPromise = new Promise((res, rej) => {
+      const req = indexedDB.open("spotmemo-photos", 1);
+      req.onupgradeneeded = () => req.result.createObjectStore("photos");
+      req.onsuccess = () => res(req.result);
+      req.onerror = () => rej(req.error);
+    });
+  }
+  return photoDbPromise;
+}
+async function putPhoto(id, blob) {
+  const db = await photoDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction("photos", "readwrite");
+    tx.objectStore("photos").put(blob, id);
+    tx.oncomplete = res;
+    tx.onerror = () => rej(tx.error);
+  });
+}
+async function getPhoto(id) {
+  const db = await photoDB();
+  return new Promise((res) => {
+    const req = db.transaction("photos").objectStore("photos").get(id);
+    req.onsuccess = () => res(req.result || null);
+    req.onerror = () => res(null);
+  });
+}
+async function deletePhotoBlob(id) {
+  try {
+    const db = await photoDB();
+    db.transaction("photos", "readwrite").objectStore("photos").delete(id);
+  } catch {}
+}
+function hasPhoto(item) {
+  return !!(item.photo || item.photoId);
+}
+async function loadPhotoInto(imgEl, photoId) {
+  const blob = await getPhoto(photoId);
+  if (!blob) return;
+  const url = URL.createObjectURL(blob);
+  imgEl.onload = () => URL.revokeObjectURL(url);
+  imgEl.src = url;
+}
+
 function startPhoto(place, item) {
-  if (item.photo) {
+  if (hasPhoto(item)) {
     openLightbox(place, item); // すでにあれば拡大表示
     return;
   }
@@ -371,26 +420,28 @@ photoInput.addEventListener("change", () => {
   const file = photoInput.files && photoInput.files[0];
   if (!file || !photoTarget) return;
   const img = new Image();
-  img.onload = () => {
-    // 端末内保存(localStorage)の容量節約のため縮小してJPEG化
-    const MAX = 480;
+  img.onload = async () => {
+    // 高画質で保存（1600pxまで・JPEG品質0.8）
+    const MAX = 1600;
     const scale = Math.min(1, MAX / Math.max(img.width, img.height));
     const canvas = document.createElement("canvas");
     canvas.width = Math.round(img.width * scale);
     canvas.height = Math.round(img.height * scale);
     canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
-    const data = canvas.toDataURL("image/jpeg", 0.6);
     URL.revokeObjectURL(img.src);
+    const blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.8));
     const place = findPlace(photoTarget.placeId);
     const item = place && place.items.find((i) => i.id === photoTarget.itemId);
     photoTarget = null;
-    if (!item) return;
-    item.photo = data;
+    if (!item || !blob) return;
+    const photoId = uid();
     try {
+      await putPhoto(photoId, blob);
+      delete item.photo; // 旧形式（低画質）が残っていれば置き換え
+      item.photoId = photoId;
       save();
     } catch {
-      delete item.photo;
-      alert("保存容量がいっぱいです。ほかの写真を削除してから試してください。");
+      alert("写真を保存できませんでした");
     }
     renderItems();
   };
@@ -399,7 +450,10 @@ photoInput.addEventListener("change", () => {
 
 function openLightbox(place, item) {
   const lb = document.getElementById("lightbox");
-  document.getElementById("lightbox-img").src = item.photo;
+  const im = document.getElementById("lightbox-img");
+  im.removeAttribute("src");
+  if (item.photo) im.src = item.photo;
+  else if (item.photoId) loadPhotoInto(im, item.photoId);
   lb.dataset.placeId = place.id;
   lb.dataset.itemId = item.id;
   lb.classList.remove("hidden");
@@ -412,7 +466,9 @@ document.getElementById("lightbox-delete").addEventListener("click", () => {
   const place = findPlace(lb.dataset.placeId);
   const item = place && place.items.find((i) => i.id === lb.dataset.itemId);
   if (item && confirm("写真を削除しますか？")) {
+    if (item.photoId) deletePhotoBlob(item.photoId);
     delete item.photo;
+    delete item.photoId;
     save();
     renderItems();
     lb.classList.add("hidden");
@@ -453,6 +509,8 @@ document.getElementById("delete-place").addEventListener("click", () => {
 });
 
 function removePlace(id) {
+  const target = findPlace(id);
+  if (target) target.items.forEach((it) => { if (it.photoId) deletePhotoBlob(it.photoId); }); // 添付写真も掃除
   places = places.filter((p) => p.id !== id);
   if (markers[id]) {
     markers[id].setMap(null);
